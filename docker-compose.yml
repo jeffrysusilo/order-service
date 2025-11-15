@@ -1,0 +1,138 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: order-postgres
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: order-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: order-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: order-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.50
+    container_name: order-jaeger
+    ports:
+      - "5775:5775/udp"
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # Jaeger collector
+      - "14250:14250"
+      - "9411:9411"
+    environment:
+      COLLECTOR_ZIPKIN_HOST_PORT: ":9411"
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: order-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deployments/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: order-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_USER: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  order-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: order-service
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - ENV=development
+      - DATABASE_URL=postgres://app:secret@postgres:5432/app?sslmode=disable
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      - KAFKA_BROKERS=kafka:29092
+      - KAFKA_TOPIC_ORDER_EVENTS=order-events
+      - KAFKA_CONSUMER_GROUP=order-service-group
+      - JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      - PROMETHEUS_PORT=9090
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
