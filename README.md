@@ -447,14 +447,6 @@ docker exec -it order-postgres psql -U app -d app
 docker exec order-kafka kafka-topics --list --bootstrap-server localhost:9092
 ```
 
-## 📝 License
 
-MIT
-
-## 👨‍💻 Author
-
-Built with ❤️ for high-concurrency order processing
-
----
 
 **Need Help?** Check the logs, metrics, and traces!
